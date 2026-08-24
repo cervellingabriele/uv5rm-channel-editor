@@ -17,9 +17,9 @@ its interface is clumsy for **entering and organizing zones and channels** (no
 block paste, one-cell-at-a-time input). This tool exists to make that bulk input
 fast, then hand a finished `.xlc` back to the CPS for writing to the radio.
 
-> **Note on CHIRP:** [CHIRP](https://chirpmyradio.com/) lists this radio as a
-> supported model, but in testing here **serial communication with it never
-> worked**, despite that listing. This is one first-hand report, not a general
+> **Note on CHIRP:** [CHIRP](https://chirpmyradio.com/) lists the **Baofeng
+> UV-5RM Plus (GPS)** as a supported model, but in testing here **serial
+> communication with it never worked** on this radio, despite that listing. This is one first-hand report, not a general
 > verdict on CHIRP — your mileage may vary — but if CHIRP fails to connect,
 > the manufacturer's CPS (paired with this tool for the tedious parts) is the
 > documented working path. That combination — CHIRP not working here, and the
