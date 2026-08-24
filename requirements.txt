@@ -1,0 +1,3 @@
+# Runtime: none — standard library only (tkinter ships with Python).
+# Development only:
+pytest>=7
