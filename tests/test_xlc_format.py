@@ -81,6 +81,15 @@ def test_frequency_bcd_is_exact(blank):
         assert abs(reloaded.channels[0].rx - freq) < 1e-6
 
 
+def test_frequency_out_of_range_raises(blank):
+    # 1000.0 MHz needs 9 BCD digits and must not silently wrap to 100.0 MHz.
+    blank.channels = [
+        Channel(1, "X", 1000.0, 1000.0, 0.0, True, True, raw=None, dirty=True)
+    ]
+    with pytest.raises(ValueError):
+        blank.build()
+
+
 def test_tone_roundtrip(blank):
     # generic 70 cm repeater example (+5 MHz shift, common 88.5 Hz tone)
     blank.channels = [

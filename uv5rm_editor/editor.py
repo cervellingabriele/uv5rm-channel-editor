@@ -48,6 +48,22 @@ def _zone_choices(zone_names: Dict[int, str]) -> List[str]:
     ]
 
 
+def _check_frequency(value: float, label: str, parent) -> bool:
+    """Validate a frequency; return False (after alerting) if it should be rejected."""
+    if not 18.0 <= value <= 999.99999:
+        messagebox.showwarning(APP_TITLE, f"{label} out of plausible range.", parent=parent)
+        return False
+    in_band = (108 <= value <= 174) or (400 <= value <= 520)
+    if not in_band and not messagebox.askyesno(
+        APP_TITLE,
+        f"{label} = {format_frequency(value)} MHz is outside the radio's "
+        "typical bands (108-174 / 400-520). Add it anyway?",
+        parent=parent,
+    ):
+        return False
+    return True
+
+
 class ChannelDialog(tk.Toplevel):
     """Modal dialog to create or edit a single channel."""
 
@@ -138,24 +154,14 @@ class ChannelDialog(tk.Toplevel):
             rx = float(self.e_rx.get().replace(",", "."))
             tx_text = self.e_tx.get().replace(",", ".").strip()
             tx = float(tx_text) if tx_text else rx
+            tone_text = self.cb_tone.get().strip()
+            tone = 0.0 if tone_text in ("", "-") else float(tone_text.replace(",", "."))
         except ValueError:
-            messagebox.showwarning(APP_TITLE, "Invalid frequency.", parent=self)
+            messagebox.showwarning(APP_TITLE, "Invalid frequency or tone.", parent=self)
             return
 
-        tone_text = self.cb_tone.get().strip()
-        tone = 0.0 if tone_text in ("", "-") else float(tone_text.replace(",", "."))
-
         for value, label in ((rx, "RX"), (tx, "TX")):
-            if not 18.0 <= value <= 1000.0:
-                messagebox.showwarning(APP_TITLE, f"{label} out of plausible range.", parent=self)
-                return
-            in_band = (108 <= value <= 174) or (400 <= value <= 520)
-            if not in_band and not messagebox.askyesno(
-                APP_TITLE,
-                f"{label} = {format_frequency(value)} MHz is outside the radio's "
-                "typical bands (108-174 / 400-520). Add it anyway?",
-                parent=self,
-            ):
+            if not _check_frequency(value, label, self):
                 return
 
         self.result = dict(
@@ -238,13 +244,18 @@ class BlockDialog(tk.Toplevel):
             messagebox.showwarning(APP_TITLE, f"Count must be 1..{SLOTS_PER_ZONE}.", parent=self)
             return
 
+        freqs = [round(f0 + i * step, 5) for i in range(count)]
+        for value, label in ((min(freqs), "Lowest generated frequency"),
+                              (max(freqs), "Highest generated frequency")):
+            if not _check_frequency(value, label, self):
+                return
+
         zone = self.cb_zone.current() + 1
         high = self.cb_power.get() == "High"
         wide = self.cb_band.get().startswith("Wide")
         channels = []
-        for i in range(count):
+        for i, freq in enumerate(freqs):
             name = f"{prefix}{start + i:0{pad}d}"[:NAME_MAXLEN]
-            freq = round(f0 + i * step, 5)
             channels.append(Channel(zone, name, freq, freq, 0.0, high, wide, raw=None, dirty=True))
         self.result = channels
         self.destroy()
@@ -422,7 +433,7 @@ class EditorApp(tk.Tk):
     def _write(self, path: str) -> None:
         try:
             self.codeplug.save(path, allow_airband=self.airband_var.get(), make_backup=True)
-        except (OSError, CodeplugError) as error:
+        except (OSError, CodeplugError, ValueError) as error:
             messagebox.showerror(APP_TITLE, f"Save failed:\n{error}")
             return
         messagebox.showinfo(

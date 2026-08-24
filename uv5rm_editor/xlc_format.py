@@ -106,6 +106,10 @@ CTCSS_TONES = (
 def _freq_to_bcd_le(mhz: float) -> bytes:
     """Encode a frequency in MHz to 4-byte little-endian BCD (10 Hz units)."""
     value = round(mhz * 100_000)
+    if not 0 <= value <= 99_999_999:
+        raise ValueError(
+            f"frequency {mhz} MHz cannot be encoded (must be 0..999.99999 MHz)"
+        )
     digits = f"{value:08d}"
     big_endian = bytes((int(digits[i]) << 4) | int(digits[i + 1]) for i in range(0, 8, 2))
     return big_endian[::-1]
