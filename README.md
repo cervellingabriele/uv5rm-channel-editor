@@ -26,6 +26,28 @@ fast, then hand a finished `.xlc` back to the CPS for writing to the radio.
 > stock CPS too slow for bulk entry — is exactly the gap this project was
 > built to fill.
 
+> **Other Baofeng models:** only the **UV-5RM Plus (GPS)** has been
+> reverse-engineered and tested. Nothing here is confirmed for the plain
+> UV-5RM, UV-5RH, UV-5RH Pro, UV-5RM Pro, or any other variant — even if they
+> use the same CPS, the same file size does **not** guarantee the same memory
+> layout. If you own a different model and want to find out, send a small,
+> predefined battery of `.xlc` files read from your radio through the CPS,
+> each isolating one thing to check:
+> 1. A base file, read straight from the radio, untouched.
+> 2. The base plus one channel added in zone 1, slot 1, with a known
+>    name/RX/TX/tone, **high power + wide band**.
+> 3. The same, but **low power + narrow band + no tone**, to isolate the flag byte.
+> 4. A channel added in the **last slot of a zone** (slot 64) and one in a
+>    **second zone**, to confirm the zone table, slot indices and per-zone count.
+> 5. A **zone renamed**, to locate the zone name field.
+> 6. If exposed by the CPS, the **airband/band-limit toggle**, on and off.
+>
+> Diffing each file against the base isolates exactly which bytes move for
+> each kind of change, which is what makes it possible to confirm (or find
+> the differences in) the memory map before anything is written back. Once
+> verified, the tool can be tried on that model too — as always, **back up
+> before *and* after** writing to the radio.
+
 > **Status:** community / hobby project. The `.xlc` layout was reverse-engineered
 > from real codeplugs and is **not** official Baofeng documentation. It has been
 > tested on a **single radio, by one person** — there may be unintended bugs on
