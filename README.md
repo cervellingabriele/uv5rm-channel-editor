@@ -17,6 +17,15 @@ its interface is clumsy for **entering and organizing zones and channels** (no
 block paste, one-cell-at-a-time input). This tool exists to make that bulk input
 fast, then hand a finished `.xlc` back to the CPS for writing to the radio.
 
+> **Note on CHIRP:** [CHIRP](https://chirpmyradio.com/) lists this radio as a
+> supported model, but in testing here **serial communication with it never
+> worked**, despite that listing. This is one first-hand report, not a general
+> verdict on CHIRP — your mileage may vary — but if CHIRP fails to connect,
+> the manufacturer's CPS (paired with this tool for the tedious parts) is the
+> documented working path. That combination — CHIRP not working here, and the
+> stock CPS too slow for bulk entry — is exactly the gap this project was
+> built to fill.
+
 > **Status:** community / hobby project. The `.xlc` layout was reverse-engineered
 > from real codeplugs and is **not** official Baofeng documentation. It has been
 > tested on a **single radio, by one person** — there may be unintended bugs on
