@@ -10,6 +10,8 @@ the GUI uses `tkinter`, which ships with Python.
 
 ## Tested hardware
 
+<img src="docs/images/hardware-setup.jpg" alt="Baofeng UV-5RM Plus GPS next to the home-made FTDI-based serial programming cable" width="420">
+
 Developed and tested on a **Baofeng UV-5RM Plus (GPS)** using a **serial
 programming cable** and the manufacturer's Windows CPS. As of today that CPS
 appears to be the only software that reliably talks to this specific radio, and
