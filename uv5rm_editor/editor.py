@@ -48,6 +48,17 @@ def _zone_choices(zone_names: Dict[int, str]) -> List[str]:
     ]
 
 
+_SORT_KEYS = {
+    "zone": lambda c: c.zone,
+    "name": lambda c: c.name.lower(),
+    "rx": lambda c: c.rx,
+    "tx": lambda c: c.tx,
+    "tone": lambda c: c.tone,
+    "power": lambda c: c.high_power,
+    "band": lambda c: c.wide,
+}
+
+
 def _check_frequency(value: float, label: str, parent) -> bool:
     """Validate a frequency; return False (after alerting) if it should be rejected."""
     if not 18.0 <= value <= 999.99999:
@@ -67,11 +78,14 @@ def _check_frequency(value: float, label: str, parent) -> bool:
 class ChannelDialog(tk.Toplevel):
     """Modal dialog to create or edit a single channel."""
 
-    def __init__(self, master, zone_names, channel=None, default_zone=1):
+    def __init__(self, master, zone_names, channel=None, default_zone=1,
+                 existing=None, self_index=None):
         super().__init__(master)
         self.title("Edit channel" if channel else "New channel")
         self.resizable(False, False)
         self.result: Optional[dict] = None
+        self.existing: List[Channel] = existing or []
+        self.self_index = self_index
         self.grab_set()
 
         pad = dict(padx=8, pady=4)
@@ -164,9 +178,34 @@ class ChannelDialog(tk.Toplevel):
             if not _check_frequency(value, label, self):
                 return
 
+        zone = self.cb_zone.current() + 1
+        others = [(i, c) for i, c in enumerate(self.existing) if i != self.self_index]
+
+        dup_name = next((c for _, c in others if c.name.strip().lower() == name.lower()), None)
+        if dup_name and not messagebox.askyesno(
+            APP_TITLE,
+            f"A channel named '{dup_name.name}' already exists (zone {dup_name.zone}). "
+            "Continue anyway?",
+            parent=self,
+        ):
+            return
+
+        dup_freq = next(
+            (c for _, c in others
+             if c.zone == zone and abs(c.rx - rx) < 1e-6 and abs(c.tx - tx) < 1e-6),
+            None,
+        )
+        if dup_freq and not messagebox.askyesno(
+            APP_TITLE,
+            f"Channel '{dup_freq.name}' in the same zone already uses "
+            f"RX {format_frequency(rx)} / TX {format_frequency(tx)}. Continue anyway?",
+            parent=self,
+        ):
+            return
+
         self.result = dict(
             name=name,
-            zone=self.cb_zone.current() + 1,
+            zone=zone,
             rx=rx,
             tx=tx,
             tone=tone,
@@ -176,27 +215,120 @@ class ChannelDialog(tk.Toplevel):
         self.destroy()
 
 
-class BlockDialog(tk.Toplevel):
-    """Modal dialog to generate a numbered block of evenly-spaced channels."""
+class BulkEditDialog(tk.Toplevel):
+    """Modal dialog to change one or more fields on several channels at once."""
 
-    def __init__(self, master, zone_names, default_zone=1):
+    def __init__(self, master, zone_names, count):
         super().__init__(master)
-        self.title("Generate channel block")
+        self.title(f"Bulk edit ({count} channel{'s' if count != 1 else ''})")
         self.resizable(False, False)
-        self.result: Optional[List[Channel]] = None
+        self.result: Optional[dict] = None
         self.grab_set()
 
         pad = dict(padx=8, pady=4)
         frame = ttk.Frame(self, padding=12)
         frame.grid(sticky="nsew")
 
+        ttk.Label(
+            frame, text="Only checked fields are applied to all selected channels.",
+        ).grid(row=0, column=0, columnspan=2, sticky="w", **pad)
+
+        self.var_zone = tk.BooleanVar(value=False)
+        self.var_power = tk.BooleanVar(value=False)
+        self.var_band = tk.BooleanVar(value=False)
+        self.var_tone = tk.BooleanVar(value=False)
+
+        ttk.Checkbutton(frame, variable=self.var_zone, text="Zone").grid(
+            row=1, column=0, sticky="e", **pad)
+        self.cb_zone = ttk.Combobox(frame, width=28, state="readonly",
+                                    values=_zone_choices(zone_names))
+        self.cb_zone.current(0)
+        self.cb_zone.grid(row=1, column=1, sticky="w", **pad)
+
+        ttk.Checkbutton(frame, variable=self.var_power, text="Power").grid(
+            row=2, column=0, sticky="e", **pad)
+        self.cb_power = ttk.Combobox(frame, width=14, state="readonly", values=["High", "Low"])
+        self.cb_power.current(0)
+        self.cb_power.grid(row=2, column=1, sticky="w", **pad)
+
+        ttk.Checkbutton(frame, variable=self.var_band, text="Bandwidth").grid(
+            row=3, column=0, sticky="e", **pad)
+        self.cb_band = ttk.Combobox(frame, width=14, state="readonly",
+                                    values=["Wide (25k)", "Narrow (12.5k)"])
+        self.cb_band.current(0)
+        self.cb_band.grid(row=3, column=1, sticky="w", **pad)
+
+        ttk.Checkbutton(frame, variable=self.var_tone, text="TX tone (Hz)").grid(
+            row=4, column=0, sticky="e", **pad)
+        self.cb_tone = ttk.Combobox(
+            frame, width=14,
+            values=["-"] + [f"{t:.1f}" for t in CTCSS_TONES if t],
+        )
+        self.cb_tone.set("-")
+        self.cb_tone.grid(row=4, column=1, sticky="w", **pad)
+
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=5, column=0, columnspan=2, pady=(12, 0))
+        ttk.Button(buttons, text="Apply", command=self._accept).pack(side="left", padx=6)
+        ttk.Button(buttons, text="Cancel", command=self.destroy).pack(side="left", padx=6)
+        self.bind("<Escape>", lambda _e: self.destroy())
+
+    def _accept(self) -> None:
+        if not (self.var_zone.get() or self.var_power.get()
+                or self.var_band.get() or self.var_tone.get()):
+            messagebox.showwarning(APP_TITLE, "Check at least one field to change.", parent=self)
+            return
+
+        result: dict = {}
+        if self.var_zone.get():
+            result["zone"] = self.cb_zone.current() + 1
+        if self.var_power.get():
+            result["high_power"] = self.cb_power.get() == "High"
+        if self.var_band.get():
+            result["wide"] = self.cb_band.get().startswith("Wide")
+        if self.var_tone.get():
+            tone_text = self.cb_tone.get().strip()
+            try:
+                result["tone"] = 0.0 if tone_text in ("", "-") else float(
+                    tone_text.replace(",", "."))
+            except ValueError:
+                messagebox.showwarning(APP_TITLE, "Invalid tone.", parent=self)
+                return
+
+        self.result = result
+        self.destroy()
+
+
+_DEFAULT_BLOCK_PARAMS = dict(
+    prefix="LPD", start="1", pad="2", f0="433.075", step="25", count="10",
+    zone=1, power="Low", band="Narrow (12.5k)",
+)
+
+
+class BlockDialog(tk.Toplevel):
+    """Modal dialog to generate a numbered block of evenly-spaced channels."""
+
+    def __init__(self, master, zone_names, default_zone=1, defaults=None):
+        super().__init__(master)
+        self.title("Generate channel block")
+        self.resizable(False, False)
+        self.result: Optional[List[Channel]] = None
+        self.last_params: Optional[dict] = None
+        self.grab_set()
+
+        params = {**_DEFAULT_BLOCK_PARAMS, **(defaults or {})}
+
+        pad = dict(padx=8, pady=4)
+        frame = ttk.Frame(self, padding=12)
+        frame.grid(sticky="nsew")
+
         rows = [
-            ("Name prefix:", "e_prefix", "LPD"),
-            ("Start number:", "e_start", "1"),
-            ("Digits (zero pad):", "e_pad", "2"),
-            ("Start freq (MHz):", "e_f0", "433.075"),
-            ("Step (kHz):", "e_step", "25"),
-            ("Count:", "e_count", "10"),
+            ("Name prefix:", "e_prefix", params["prefix"]),
+            ("Start number:", "e_start", params["start"]),
+            ("Digits (zero pad):", "e_pad", params["pad"]),
+            ("Start freq (MHz):", "e_f0", params["f0"]),
+            ("Step (kHz):", "e_step", params["step"]),
+            ("Count:", "e_count", params["count"]),
         ]
         for i, (label, attr, default) in enumerate(rows):
             ttk.Label(frame, text=label).grid(row=i, column=0, sticky="e", **pad)
@@ -209,18 +341,18 @@ class BlockDialog(tk.Toplevel):
         ttk.Label(frame, text="Zone:").grid(row=base_row, column=0, sticky="e", **pad)
         self.cb_zone = ttk.Combobox(frame, width=28, state="readonly",
                                     values=_zone_choices(zone_names))
-        self.cb_zone.current(default_zone - 1)
+        self.cb_zone.current(params.get("zone", default_zone) - 1)
         self.cb_zone.grid(row=base_row, column=1, sticky="w", **pad)
 
         ttk.Label(frame, text="Power:").grid(row=base_row + 1, column=0, sticky="e", **pad)
         self.cb_power = ttk.Combobox(frame, width=14, state="readonly", values=["High", "Low"])
-        self.cb_power.set("Low")
+        self.cb_power.set(params["power"])
         self.cb_power.grid(row=base_row + 1, column=1, sticky="w", **pad)
 
         ttk.Label(frame, text="Bandwidth:").grid(row=base_row + 2, column=0, sticky="e", **pad)
         self.cb_band = ttk.Combobox(frame, width=14, state="readonly",
                                     values=["Wide (25k)", "Narrow (12.5k)"])
-        self.cb_band.set("Narrow (12.5k)")
+        self.cb_band.set(params["band"])
         self.cb_band.grid(row=base_row + 2, column=1, sticky="w", **pad)
 
         buttons = ttk.Frame(frame)
@@ -230,13 +362,18 @@ class BlockDialog(tk.Toplevel):
         self.bind("<Escape>", lambda _e: self.destroy())
 
     def _accept(self) -> None:
+        raw_prefix = self.e_prefix.get()
+        raw_start = self.e_start.get()
+        raw_pad = self.e_pad.get()
+        raw_f0 = self.e_f0.get()
+        raw_step = self.e_step.get()
+        raw_count = self.e_count.get()
         try:
-            prefix = self.e_prefix.get().strip()
-            start = int(self.e_start.get())
-            pad = int(self.e_pad.get())
-            f0 = float(self.e_f0.get().replace(",", "."))
-            step = float(self.e_step.get().replace(",", ".")) / 1000.0
-            count = int(self.e_count.get())
+            start = int(raw_start)
+            pad = int(raw_pad)
+            f0 = float(raw_f0.replace(",", "."))
+            step = float(raw_step.replace(",", ".")) / 1000.0
+            count = int(raw_count)
         except ValueError:
             messagebox.showwarning(APP_TITLE, "Invalid values.", parent=self)
             return
@@ -255,9 +392,13 @@ class BlockDialog(tk.Toplevel):
         wide = self.cb_band.get().startswith("Wide")
         channels = []
         for i, freq in enumerate(freqs):
-            name = f"{prefix}{start + i:0{pad}d}"[:NAME_MAXLEN]
+            name = f"{raw_prefix}{start + i:0{pad}d}"[:NAME_MAXLEN]
             channels.append(Channel(zone, name, freq, freq, 0.0, high, wide, raw=None, dirty=True))
         self.result = channels
+        self.last_params = dict(
+            prefix=raw_prefix, start=raw_start, pad=raw_pad, f0=raw_f0, step=raw_step,
+            count=raw_count, zone=zone, power=self.cb_power.get(), band=self.cb_band.get(),
+        )
         self.destroy()
 
 
@@ -303,6 +444,9 @@ class EditorApp(tk.Tk):
         self.minsize(820, 480)
         self.codeplug: Optional[Codeplug] = None
         self.airband_var = tk.BooleanVar(value=False)
+        self._sort_column: Optional[str] = None
+        self._sort_reverse = False
+        self._last_block_params: Optional[dict] = None
         self._build_menu()
         self._build_toolbar()
         self._build_table()
@@ -323,6 +467,7 @@ class EditorApp(tk.Tk):
 
         tools_menu = tk.Menu(menubar, tearoff=0)
         tools_menu.add_command(label="New channel...", command=self.add_channel)
+        tools_menu.add_command(label="Bulk edit selected...", command=self.bulk_edit)
         tools_menu.add_command(label="Generate block...", command=self.generate_block)
         tools_menu.add_command(label="Rename zones...", command=self.rename_zones)
         tools_menu.add_separator()
@@ -349,6 +494,8 @@ class EditorApp(tk.Tk):
         ttk.Button(bar, text="Duplicate", command=self.duplicate_channel).pack(side="left", padx=3)
         ttk.Button(bar, text="Delete", command=self.delete_channel).pack(side="left", padx=3)
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8)
+        ttk.Button(bar, text="Bulk edit", command=self.bulk_edit).pack(side="left", padx=3)
+        ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8)
         ttk.Button(bar, text="Generate block", command=self.generate_block).pack(side="left", padx=3)
         ttk.Button(bar, text="Rename zones", command=self.rename_zones).pack(side="left", padx=3)
 
@@ -359,8 +506,10 @@ class EditorApp(tk.Tk):
         headings = ("Zone", "Name", "RX (MHz)", "TX (MHz)", "TX tone", "Power", "Bandwidth")
         widths = (140, 130, 110, 110, 80, 80, 120)
         self.tree = ttk.Treeview(wrapper, columns=columns, show="headings", selectmode="extended")
+        self._columns = columns
+        self._headings = dict(zip(columns, headings))
         for column, heading, width in zip(columns, headings, widths):
-            self.tree.heading(column, text=heading)
+            self.tree.heading(column, text=heading, command=lambda c=column: self._sort_by(c))
             self.tree.column(column, width=width, anchor="w")
         scrollbar = ttk.Scrollbar(wrapper, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
@@ -373,7 +522,21 @@ class EditorApp(tk.Tk):
         self.status.pack(side="bottom", fill="x")
 
     # -- helpers -----------------------------------------------------------
+    def _sort_by(self, column: str) -> None:
+        if self._sort_column == column:
+            self._sort_reverse = not self._sort_reverse
+        else:
+            self._sort_column = column
+            self._sort_reverse = False
+        self._refresh()
+
     def _refresh(self) -> None:
+        for column in self._columns:
+            text = self._headings[column]
+            if column == self._sort_column:
+                text += " ▼" if self._sort_reverse else " ▲"
+            self.tree.heading(column, text=text)
+
         for item in self.tree.get_children():
             self.tree.delete(item)
         if self.codeplug is None:
@@ -381,7 +544,12 @@ class EditorApp(tk.Tk):
             self.title(APP_TITLE)
             return
 
-        ordered = sorted(enumerate(self.codeplug.channels), key=lambda t: (t[1].zone, t[0]))
+        if self._sort_column is None:
+            ordered = sorted(enumerate(self.codeplug.channels), key=lambda t: (t[1].zone, t[0]))
+        else:
+            key_fn = _SORT_KEYS[self._sort_column]
+            ordered = sorted(enumerate(self.codeplug.channels),
+                              key=lambda t: key_fn(t[1]), reverse=self._sort_reverse)
         for index, channel in ordered:
             zone_label = f"{channel.zone} {self.codeplug.zone_names.get(channel.zone, '')}".strip()
             self.tree.insert("", "end", iid=str(index), values=(
@@ -465,7 +633,7 @@ class EditorApp(tk.Tk):
     def add_channel(self) -> None:
         if not self._require_open():
             return
-        dialog = ChannelDialog(self, self.codeplug.zone_names)
+        dialog = ChannelDialog(self, self.codeplug.zone_names, existing=self.codeplug.channels)
         self.wait_window(dialog)
         if dialog.result:
             r = dialog.result
@@ -483,7 +651,8 @@ class EditorApp(tk.Tk):
             messagebox.showinfo(APP_TITLE, "Select exactly one channel to edit.")
             return
         channel = self.codeplug.channels[selection[0]]
-        dialog = ChannelDialog(self, self.codeplug.zone_names, channel=channel)
+        dialog = ChannelDialog(self, self.codeplug.zone_names, channel=channel,
+                               existing=self.codeplug.channels, self_index=selection[0])
         self.wait_window(dialog)
         if dialog.result:
             r = dialog.result
@@ -509,6 +678,29 @@ class EditorApp(tk.Tk):
             )
         self._refresh()
 
+    def bulk_edit(self) -> None:
+        if not self._require_open():
+            return
+        selection = self._selected_indices()
+        if not selection:
+            messagebox.showinfo(APP_TITLE, "Select one or more channels to bulk-edit.")
+            return
+        dialog = BulkEditDialog(self, self.codeplug.zone_names, len(selection))
+        self.wait_window(dialog)
+        if dialog.result:
+            for index in selection:
+                channel = self.codeplug.channels[index]
+                for field, value in dialog.result.items():
+                    setattr(channel, field, value)
+                channel.dirty = True
+            if self.codeplug.zone_overflow():
+                messagebox.showwarning(
+                    APP_TITLE,
+                    "One or more zones now exceed 64 channels.\n"
+                    "Move some channels before saving, or the save will be blocked.",
+                )
+            self._refresh()
+
     def delete_channel(self) -> None:
         if not self._require_open():
             return
@@ -525,9 +717,10 @@ class EditorApp(tk.Tk):
     def generate_block(self) -> None:
         if not self._require_open():
             return
-        dialog = BlockDialog(self, self.codeplug.zone_names)
+        dialog = BlockDialog(self, self.codeplug.zone_names, defaults=self._last_block_params)
         self.wait_window(dialog)
         if dialog.result:
+            self._last_block_params = dialog.last_params
             self.codeplug.channels.extend(dialog.result)
             if self.codeplug.zone_overflow():
                 messagebox.showwarning(
