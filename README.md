@@ -63,6 +63,11 @@ fast, then hand a finished `.xlc` back to the CPS for writing to the radio.
 - Open an existing `.xlc` and edit it while **preserving every unrelated setting**
   (display mode, DTMF, APRS, etc.) — only channels, zones and the band limit are rewritten.
 - Table view of all channels with add / edit / duplicate / delete.
+- **Bulk edit**: change zone, power, bandwidth or tone on several selected
+  channels at once.
+- Click a column header to **sort** the table by it (click again to reverse).
+- **CSV import**: bulk-add channels from a spreadsheet (see
+  [CSV import format](#csv-import-format) below).
 - **Block generator**: create numbered series such as `LPD01…LPD64` with a fixed
   kHz step in one step.
 - Rename all zones; up to 10 zones × 64 channels.
@@ -132,6 +137,34 @@ read-backs are the real safety net.
 - Leave the TX field empty for a simplex channel.
 - The tone field is the **TX CTCSS**. Separate RX tone and explicit AM mode are
   intentionally not written; on channels you don't touch they are preserved as-is.
+
+---
+
+## CSV import format
+
+**File → Import CSV...** (or the toolbar button) bulk-adds channels from a
+CSV file. Expected header (case-insensitive):
+
+```
+Zone,Name,RX,TX,Tone,Power,Bandwidth
+1,PMR01,446.00625,446.00625,,Low,Narrow
+2,RPT,145.000,145.600,88.5,High,Wide
+```
+
+- **Zone, Name, RX** are required. **TX, Tone, Power, Bandwidth** are optional
+  per row and fall back to sensible defaults when left blank:
+  - `TX` empty → simplex (same as RX).
+  - `Tone` empty or `-` → no tone.
+  - `Power` empty → `High` (accepts `High`/`Low` or `H`/`L`).
+  - `Bandwidth` empty → `Wide` (accepts `Wide`/`Narrow`, `25k`/`12.5k`).
+- A name longer than 10 characters is truncated, not rejected.
+- Rows with invalid data (bad zone, unparseable frequency, unrecognized
+  power/bandwidth) are **skipped**, not fatal — every other valid row is
+  still imported.
+- Before anything is added, a summary dialog lists exactly what will be
+  imported and every row that was skipped or altered, so nothing is applied
+  silently. Overflow (>64 channels in a zone) is still caught the same way
+  as everywhere else in the app, on save.
 
 ---
 

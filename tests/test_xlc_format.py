@@ -18,6 +18,7 @@ from uv5rm_editor.xlc_format import (  # noqa: E402
     Channel,
     Codeplug,
     CodeplugError,
+    channels_from_csv,
     format_frequency,
     format_tone,
 )
@@ -154,6 +155,87 @@ def test_active_zone_counter(blank):
     ]
     image = blank.build()
     assert image[31360] == 2  # two zones populated
+
+
+def test_csv_import_basic():
+    csv_text = (
+        "Zone,Name,RX,TX,Tone,Power,Bandwidth\n"
+        "1,PMR01,446.00625,446.00625,,Low,Narrow\n"
+        "2,RPT,145.000,145.600,88.5,High,Wide\n"
+    )
+    channels, messages = channels_from_csv(csv_text)
+    assert messages == []
+    assert len(channels) == 2
+    c1, c2 = channels
+    assert (c1.zone, c1.name, c1.rx, c1.tx, c1.tone, c1.high_power, c1.wide) == (
+        1, "PMR01", 446.00625, 446.00625, 0.0, False, False)
+    assert (c2.zone, c2.name, c2.rx, c2.tx, c2.tone, c2.high_power, c2.wide) == (
+        2, "RPT", 145.0, 145.6, 88.5, True, True)
+
+
+def test_csv_import_empty_tx_defaults_to_simplex():
+    csv_text = "Zone,Name,RX\n1,SIMPLEX,433.500\n"
+    channels, messages = channels_from_csv(csv_text)
+    assert messages == []
+    assert channels[0].tx == channels[0].rx == 433.5
+
+
+def test_csv_import_header_is_case_insensitive():
+    csv_text = "zone,NAME,rx\n3,X,433.000\n"
+    channels, messages = channels_from_csv(csv_text)
+    assert messages == []
+    assert channels[0].zone == 3 and channels[0].name == "X"
+
+
+def test_csv_import_missing_required_column_raises():
+    with pytest.raises(CodeplugError):
+        channels_from_csv("Zone,RX\n1,433.000\n")
+
+
+def test_csv_import_skips_invalid_rows_but_keeps_valid_ones():
+    csv_text = (
+        "Zone,Name,RX,Power,Bandwidth\n"
+        "99,BADZONE,433.000,High,Wide\n"      # zone out of range
+        "1,,433.000,High,Wide\n"              # empty name
+        "1,BADFREQ,notanumber,High,Wide\n"    # unparseable RX
+        "1,BADPOWER,433.000,Sideways,Wide\n"  # invalid power
+        "1,BADBAND,433.000,High,Sideways\n"   # invalid bandwidth
+        "1,OK,433.000,High,Wide\n"            # the only valid row
+    )
+    channels, messages = channels_from_csv(csv_text)
+    assert len(channels) == 1
+    assert channels[0].name == "OK"
+    assert len(messages) == 5
+    assert all("skipped" in m for m in messages)
+
+
+def test_csv_import_truncates_long_name_with_a_note():
+    csv_text = "Zone,Name,RX\n1,WAYTOOLONGNAME,433.000\n"
+    channels, messages = channels_from_csv(csv_text)
+    assert channels[0].name == "WAYTOOLONG"
+    assert len(messages) == 1
+    assert "truncated" in messages[0]
+
+
+def test_csv_import_ignores_blank_lines():
+    csv_text = "Zone,Name,RX\n1,A,433.000\n\n2,B,434.000\n"
+    channels, messages = channels_from_csv(csv_text)
+    assert messages == []
+    assert [c.name for c in channels] == ["A", "B"]
+
+
+def test_csv_import_out_of_encodable_range_is_skipped():
+    csv_text = "Zone,Name,RX\n1,TOOBIG,1000.0\n"
+    channels, messages = channels_from_csv(csv_text)
+    assert channels == []
+    assert "skipped" in messages[0]
+
+
+def test_csv_import_implausible_but_encodable_freq_is_warned_not_skipped():
+    csv_text = "Zone,Name,RX\n1,LOW,10.0\n"
+    channels, messages = channels_from_csv(csv_text)
+    assert len(channels) == 1  # still imported
+    assert any("plausible" in m for m in messages)
 
 
 def test_formatting_helpers():

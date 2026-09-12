@@ -51,11 +51,13 @@ Not handled on purpose
 
 from __future__ import annotations
 
+import csv
 import datetime
+import io
 import os
 import shutil
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 __all__ = [
     "FILE_SIZE",
@@ -63,10 +65,12 @@ __all__ = [
     "SLOTS_PER_ZONE",
     "NAME_MAXLEN",
     "CTCSS_TONES",
+    "CSV_COLUMNS",
     "Channel",
     "Codeplug",
     "format_frequency",
     "format_tone",
+    "channels_from_csv",
 ]
 
 # ---------------------------------------------------------------------------
@@ -359,3 +363,136 @@ def format_frequency(mhz: float) -> str:
 def format_tone(tone: float) -> str:
     """Human-readable tone (``-`` when no tone is set)."""
     return "-" if not tone else f"{tone:.1f}"
+
+
+# ---------------------------------------------------------------------------
+# CSV import
+# ---------------------------------------------------------------------------
+#: Expected CSV header (case-insensitive). Only Zone/Name/RX are required;
+#: the rest fall back to sensible defaults when a row leaves them blank.
+CSV_COLUMNS = ("Zone", "Name", "RX", "TX", "Tone", "Power", "Bandwidth")
+
+_MAX_ENCODABLE_MHZ = 999.99999
+
+
+def _csv_freq(text: str) -> float:
+    """Parse a frequency string, raising ValueError if it can't be BCD-encoded."""
+    value = float(text.replace(",", "."))
+    if not 0 <= round(value * 100_000) <= 99_999_999:
+        raise ValueError(f"{value} MHz is out of the encodable 0..{_MAX_ENCODABLE_MHZ} MHz range")
+    return value
+
+
+def channels_from_csv(text: str) -> Tuple[List[Channel], List[str]]:
+    """Parse a CSV string into channels for bulk import.
+
+    Expected header (case-insensitive): ``Zone, Name, RX, TX, Tone, Power,
+    Bandwidth``. Only Zone/Name/RX are required per row; TX defaults to RX
+    (simplex), Tone to none, Power to High, Bandwidth to Wide.
+
+    Returns ``(channels, messages)``: the successfully parsed channels, plus
+    one human-readable message per row that was skipped (invalid data) or
+    altered (e.g. a name truncated to fit, or an implausible-but-encodable
+    frequency imported anyway). Raises ``CodeplugError`` if the header is
+    missing a required column.
+    """
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames:
+        raise CodeplugError("CSV file is empty.")
+
+    field_map = {name.strip().lower(): name for name in reader.fieldnames}
+    missing = [key for key in ("zone", "name", "rx") if key not in field_map]
+    if missing:
+        raise CodeplugError(
+            f"CSV is missing required column(s): {', '.join(missing)}. "
+            f"Expected header: {', '.join(CSV_COLUMNS)}."
+        )
+
+    def get(row: dict, key: str) -> str:
+        column = field_map.get(key)
+        value = row.get(column) if column else None
+        return (value or "").strip()
+
+    channels: List[Channel] = []
+    messages: List[str] = []
+
+    for line_no, row in enumerate(reader, start=2):  # header is line 1
+        if not any((row or {}).values()):
+            continue  # skip blank line
+
+        zone_text = get(row, "zone")
+        try:
+            zone = int(zone_text)
+            if not 1 <= zone <= N_ZONES:
+                raise ValueError
+        except ValueError:
+            messages.append(f"row {line_no}: invalid zone '{zone_text}' (must be 1..{N_ZONES}) - skipped")
+            continue
+
+        name = get(row, "name")
+        if not name:
+            messages.append(f"row {line_no}: empty name - skipped")
+            continue
+        if len(name) > NAME_MAXLEN:
+            messages.append(f"row {line_no}: name '{name}' truncated to '{name[:NAME_MAXLEN]}'")
+            name = name[:NAME_MAXLEN]
+
+        rx_text = get(row, "rx")
+        try:
+            rx = _csv_freq(rx_text)
+        except ValueError:
+            messages.append(f"row {line_no}: invalid RX frequency '{rx_text}' - skipped")
+            continue
+
+        tx_text = get(row, "tx")
+        if tx_text:
+            try:
+                tx = _csv_freq(tx_text)
+            except ValueError:
+                messages.append(f"row {line_no}: invalid TX frequency '{tx_text}' - skipped")
+                continue
+        else:
+            tx = rx
+
+        tone_text = get(row, "tone")
+        if tone_text and tone_text != "-":
+            try:
+                tone = float(tone_text.replace(",", "."))
+                if tone < 0:
+                    raise ValueError
+            except ValueError:
+                messages.append(f"row {line_no}: invalid tone '{tone_text}' - skipped")
+                continue
+        else:
+            tone = 0.0
+
+        power_text = get(row, "power").lower()
+        if power_text in ("", "high", "h"):
+            high_power = True
+        elif power_text in ("low", "l"):
+            high_power = False
+        else:
+            messages.append(f"row {line_no}: invalid power '{get(row, 'power')}' (High/Low) - skipped")
+            continue
+
+        band_text = get(row, "bandwidth").lower()
+        if band_text in ("", "wide", "25k", "25"):
+            wide = True
+        elif band_text in ("narrow", "12.5k", "12.5"):
+            wide = False
+        else:
+            messages.append(
+                f"row {line_no}: invalid bandwidth '{get(row, 'bandwidth')}' (Wide/Narrow) - skipped"
+            )
+            continue
+
+        for label, value in (("RX", rx), ("TX", tx)):
+            if not 18.0 <= value <= _MAX_ENCODABLE_MHZ:
+                messages.append(
+                    f"row {line_no}: {label} {value} MHz is outside the plausible "
+                    f"18-{_MAX_ENCODABLE_MHZ} MHz range (imported anyway)"
+                )
+
+        channels.append(Channel(zone, name, rx, tx, tone, high_power, wide, raw=None, dirty=True))
+
+    return channels, messages

@@ -22,6 +22,7 @@ try:  # allow running both as a package and as a plain script
         Channel,
         Codeplug,
         CodeplugError,
+        channels_from_csv,
         format_frequency,
         format_tone,
     )
@@ -34,6 +35,7 @@ except ImportError:  # pragma: no cover - fallback for direct execution
         Channel,
         Codeplug,
         CodeplugError,
+        channels_from_csv,
         format_frequency,
         format_tone,
     )
@@ -434,6 +436,52 @@ class ZoneNamesDialog(tk.Toplevel):
         self.destroy()
 
 
+class CsvImportDialog(tk.Toplevel):
+    """Read-only summary of a CSV import: what will be added, what was skipped."""
+
+    def __init__(self, master, channels, messages):
+        super().__init__(master)
+        self.title("Import CSV")
+        self.resizable(True, True)
+        self.result = False
+        self.grab_set()
+
+        frame = ttk.Frame(self, padding=12)
+        frame.grid(sticky="nsew")
+        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
+        frame.rowconfigure(1, weight=1)
+        frame.columnconfigure(0, weight=1)
+
+        summary = f"{len(channels)} channel(s) ready to import."
+        if messages:
+            summary += f" {len(messages)} note(s) below."
+        ttk.Label(frame, text=summary).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+
+        text = tk.Text(frame, width=72, height=14, wrap="word")
+        text.grid(row=1, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=text.yview)
+        scrollbar.grid(row=1, column=1, sticky="ns")
+        text.configure(yscrollcommand=scrollbar.set)
+        text.insert("1.0", "\n".join(messages) if messages else "No issues found.")
+        text.configure(state="disabled")
+
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=2, column=0, columnspan=2, pady=(12, 0))
+        self.import_btn = ttk.Button(
+            buttons, text=f"Import {len(channels)} channel(s)", command=self._accept,
+        )
+        self.import_btn.pack(side="left", padx=6)
+        if not channels:
+            self.import_btn.state(["disabled"])
+        ttk.Button(buttons, text="Cancel", command=self.destroy).pack(side="left", padx=6)
+        self.bind("<Escape>", lambda _e: self.destroy())
+
+    def _accept(self) -> None:
+        self.result = True
+        self.destroy()
+
+
 class EditorApp(tk.Tk):
     """Main application window."""
 
@@ -462,6 +510,8 @@ class EditorApp(tk.Tk):
         file_menu.add_command(label="Save", accelerator="Ctrl+S", command=self.save_file)
         file_menu.add_command(label="Save as...", command=self.save_file_as)
         file_menu.add_separator()
+        file_menu.add_command(label="Import CSV...", command=self.import_csv)
+        file_menu.add_separator()
         file_menu.add_command(label="Quit", command=self.destroy)
         menubar.add_cascade(label="File", menu=file_menu)
 
@@ -488,6 +538,7 @@ class EditorApp(tk.Tk):
         bar.pack(side="top", fill="x")
         ttk.Button(bar, text="Open", command=self.open_file).pack(side="left", padx=3)
         ttk.Button(bar, text="Save", command=self.save_file).pack(side="left", padx=3)
+        ttk.Button(bar, text="Import CSV", command=self.import_csv).pack(side="left", padx=3)
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8)
         ttk.Button(bar, text="New", command=self.add_channel).pack(side="left", padx=3)
         ttk.Button(bar, text="Edit", command=self.edit_channel).pack(side="left", padx=3)
@@ -597,6 +648,35 @@ class EditorApp(tk.Tk):
             messagebox.showerror(APP_TITLE, f"Cannot open file:\n{error}")
             return
         self._refresh()
+
+    def import_csv(self) -> None:
+        if not self._require_open():
+            return
+        path = filedialog.askopenfilename(
+            title="Import CSV",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            with open(path, "r", newline="", encoding="utf-8-sig") as handle:
+                text = handle.read()
+            channels, messages = channels_from_csv(text)
+        except (OSError, CodeplugError) as error:
+            messagebox.showerror(APP_TITLE, f"Cannot import CSV:\n{error}")
+            return
+
+        dialog = CsvImportDialog(self, channels, messages)
+        self.wait_window(dialog)
+        if dialog.result and channels:
+            self.codeplug.channels.extend(channels)
+            if self.codeplug.zone_overflow():
+                messagebox.showwarning(
+                    APP_TITLE,
+                    "One or more zones now exceed 64 channels.\n"
+                    "Move some channels before saving, or the save will be blocked.",
+                )
+            self._refresh()
 
     def _write(self, path: str) -> None:
         try:
@@ -760,7 +840,9 @@ class EditorApp(tk.Tk):
             "channels in the CPS before writing.\n"
             "- Frequency, TX tone, power, bandwidth, name and zones are handled.\n"
             "- Separate RX tone and explicit AM mode are not modified.\n"
-            "- Max 64 channels per zone, max 10 zones.",
+            "- Max 64 channels per zone, max 10 zones.\n"
+            "- File > Import CSV bulk-adds channels from a spreadsheet "
+            "(see README for the expected columns).",
         )
 
 
